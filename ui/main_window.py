@@ -104,7 +104,7 @@ class MainWindow(ctk.CTk):
         # Botão de atualização (inicialmente oculto)
         self.btn_update = ctk.CTkButton(
             self.top_bar, text="Atualizar", width=110,
-            command=self._open_update_dialog,
+            command=lambda: self._open_update_dialog(),
             fg_color="#e67e22", hover_color="#d35400"
         )
         # Não faz pack aqui — só aparece quando houver update
