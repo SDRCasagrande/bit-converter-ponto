@@ -72,8 +72,8 @@ class MainWindow(ctk.CTk):
         # Build UI
         self._build_ui()
         
-        # Verifica atualização em background ao iniciar
-        self._check_update_background()
+        # Verifica atualização em background (adiado 2s para evitar conflito com CTk)
+        self.after(2000, lambda: self._check_update_background())
     
     def _build_ui(self):
         """Constrói toda a interface."""
