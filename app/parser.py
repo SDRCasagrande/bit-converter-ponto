@@ -1,10 +1,18 @@
 """
 Parser de arquivos AFD (Arquivo-Fonte de Dados).
 Suporta dois formatos:
-  - Formato Atual (Portaria 1510): data compacta ddmmaaaa + hhmm
-  - Formato REP_C (legado ControlID): datetime ISO 8601 (yyyy-mm-ddThh:mm:ss-0300)
+  - Portaria 671 REP-C (padrão oficial): posições fixas ddmmaaaa + hhmm
+  - ControlID proprietário (legado): datetime ISO 8601
 
 Detecta automaticamente o formato ao ler o arquivo.
+
+Layout Portaria 671:
+  Tipo 3 (ponto):  NSR(9) + "3"(1) + data(8) + hora(4) + PIS(12)
+  Tipo 5 (funcionário): NSR(9) + "5"(1) + data(8) + hora(4) + op(1) + PIS(12) + nome(52)
+  
+Layout ControlID proprietário (ISO):
+  Tipo 3 (ponto):  NSR(9) + "3"(1) + datetime(25 ISO8601) + PIS(12)
+  Tipo 5 (funcionário): NSR(9) + "5"(1) + datetime(25 ISO8601) + op(1) + PIS(12) + nome(52)
 """
 import re
 from datetime import datetime, date, time
@@ -26,7 +34,7 @@ class AFDParser:
     9 - Trailer/rodapé
     """
     
-    # Regex para ISO datetime usado no formato REP_C
+    # Regex para ISO datetime usado no formato ControlID proprietário
     ISO_DT_PATTERN = re.compile(r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([+-]\d{4})')
     
     def __init__(self):
@@ -36,7 +44,7 @@ class AFDParser:
         self.errors: List[str] = []
         self.total_lines = 0
         self.parsed_lines = 0
-        self.format_detected: str = "unknown"  # "current" ou "rep_c"
+        self.format_detected: str = "unknown"  # "portaria671" ou "controlid_iso"
     
     def parse_file(self, filepath: str) -> Tuple[Dict[str, Employee], Company]:
         """Lê e processa um arquivo AFD completo."""
@@ -54,7 +62,7 @@ class AFDParser:
         
         self.total_lines = len(content)
         
-        # Auto-detecção do formato baseado na primeira linha de marcação (tipo 3)
+        # Auto-detecção do formato
         self._detect_format(content)
         
         for line_num, line in enumerate(content, 1):
@@ -98,9 +106,21 @@ class AFDParser:
     
     def _detect_format(self, lines: List[str]):
         """
-        Detecta se é formato atual (compacto) ou REP_C (ISO datetime).
-        Procura pela primeira linha com tipo 3 e verifica o padrão de data.
+        Detecta se é formato Portaria 671 (padrão) ou ControlID proprietário (ISO).
+        
+        Regra:
+        - Se a primeira linha contém "REP_C" ou "REP-C" → Portaria 671
+        - Se encontra ISO datetime (yyyy-mm-ddT...) nos registros tipo 3 → ControlID ISO
+        - Caso contrário → Portaria 671 (padrão)
         """
+        # Checa se o cabeçalho (primeira linha) indica REP-C
+        if lines:
+            first_line = lines[0].strip().upper()
+            if 'REP_C' in first_line or 'REP-C' in first_line:
+                self.format_detected = "portaria671"
+                return
+        
+        # Procura pela primeira linha de marcação (tipo 3)
         for line in lines:
             line = line.strip()
             if len(line) < 20:
@@ -109,20 +129,21 @@ class AFDParser:
             record_type = line[9] if len(line) > 9 else ''
             
             if record_type == '3':
-                # Verifica se após o tipo '3' tem ISO datetime (REP_C)
+                # Verifica se após o tipo '3' tem ISO datetime (ControlID proprietário)
                 after_type = line[10:35]
                 if self.ISO_DT_PATTERN.match(after_type):
-                    self.format_detected = "rep_c"
+                    self.format_detected = "controlid_iso"
                 else:
-                    self.format_detected = "current"
+                    # Verifica se parece ter data compacta ddmmaaaa
+                    date_part = line[10:18]
+                    if date_part.isdigit() and len(date_part) == 8:
+                        self.format_detected = "portaria671"
+                    else:
+                        self.format_detected = "portaria671"
                 return
         
-        # Se não achou tipo 3, tenta pelo cabeçalho
-        if lines and len(lines[0].strip()) > 50:
-            if '2025-' in lines[0] or '2026-' in lines[0]:
-                self.format_detected = "rep_c"
-            else:
-                self.format_detected = "current"
+        # Default
+        self.format_detected = "portaria671"
     
     def _parse_line(self, line: str, line_num: int):
         """Identifica o tipo de registro e delega o parse."""
@@ -133,7 +154,7 @@ class AFDParser:
         if line.startswith('999999999'):
             return
         
-        # Linha de assinatura/checksum (última linha)
+        # Linha de assinatura/checksum
         if '==' in line and len(line) < 120:
             return
         
@@ -157,30 +178,38 @@ class AFDParser:
         """
         Registro Tipo 1 — Cabeçalho.
         
-        Formato atual:
-        NSR(9) + "1"(1) + TipoId(1...) + CNPJ(14) + razão(150) + ...
+        Portaria 671:
+        NSR(9) + "1"(1) + TipoId(1) + CNPJ/CPF(14) + CEI(12) + razaoSocial(150) + ...
+        Posição 10: tipo ID (1=CNPJ, 2=CPF)
+        Posição 11-24: CNPJ (14 dígitos)
+        Posição 25-36: CEI (12 dígitos)  
+        Posição 37-186: Razão Social (150 chars)
         
-        Formato REP_C:
+        ControlID ISO:
         NSR(9) + "1"(1) + CNPJ(14) + zeros(14) + razão(150) + ...
         """
         try:
-            if self.format_detected == "rep_c":
-                # REP_C: pos 10 = CNPJ(14), pos 24 = zeros(14), pos 38 = razão social
+            if self.format_detected == "controlid_iso":
                 cnpj_raw = line[10:24].strip()
                 razao = line[38:188].strip() if len(line) > 38 else ''
             else:
-                # Formato atual: o CNPJ costuma começar na pos 11
+                # Portaria 671 standard
+                # Posição 10: tipo ID (1 char)
+                # Posição 11-24: CNPJ (14 chars)
+                # Posição 25-36: CEI (12 chars)
+                # Posição 37-186: Razão Social (150 chars)
+                tipo_id = line[10] if len(line) > 10 else ''
                 cnpj_raw = line[11:25].strip()
-                razao = ''
-                # Busca a razão social — geralmente letras maiúsculas após o CNPJ
-                rest = line[25:]
-                # Pula espaços e zeros, pega texto
-                match = re.search(r'([A-ZÀ-Ú][A-ZÀ-Ú\s\.\-&]+)', rest)
-                if match:
-                    razao = match.group(1).strip()
+                razao = line[37:187].strip() if len(line) > 37 else ''
+                
+                # Se não achou razão na posição padrão, tenta buscar texto
+                if not razao:
+                    rest = line[25:]
+                    match = re.search(r'([A-ZÀ-Ú][A-ZÀ-Ú\s\.\-\&]{3,})', rest)
+                    if match:
+                        razao = match.group(1).strip()
             
-            if cnpj_raw and len(cnpj_raw) >= 14:
-                # Pega apenas os 14 primeiros dígitos
+            if cnpj_raw:
                 digits = re.sub(r'\D', '', cnpj_raw)[:14]
                 if len(digits) == 14:
                     self.company.cnpj = (
@@ -202,15 +231,20 @@ class AFDParser:
         """
         Registro Tipo 3 — Marcação de Ponto.
         
-        Formato atual (34+ chars):
-        NSR(9) + "3"(1) + data(8 ddmmaaaa) + hora(4 hhmm) + PIS(12) + checksum(4)
+        Portaria 671 (34+ chars):
+        NSR(9) + "3"(1) + data(8 ddmmaaaa) + hora(4 hhmm) + PIS(12)
+        Posição 10-17: data
+        Posição 18-21: hora
+        Posição 22-33: PIS
         
-        Formato REP_C (47+ chars):
-        NSR(9) + "3"(1) + datetime(25 ISO8601) + PIS(12) + checksum(4)
+        ControlID ISO (47+ chars):
+        NSR(9) + "3"(1) + datetime(25 ISO8601) + PIS(12)
+        Posição 10-34: datetime
+        Posição 35-46: PIS
         """
         try:
-            if self.format_detected == "rep_c":
-                # REP_C: ISO datetime
+            if self.format_detected == "controlid_iso":
+                # ControlID proprietário: ISO datetime
                 dt_str = line[10:35]
                 match = self.ISO_DT_PATTERN.match(dt_str)
                 if not match:
@@ -224,10 +258,10 @@ class AFDParser:
                 
                 pis = line[35:47].strip()
             else:
-                # Formato atual: data compacta
-                date_str = line[10:18]   # ddmmaaaa
-                time_str = line[18:22]   # hhmm
-                pis = line[22:34].strip()
+                # Portaria 671: posições fixas
+                date_str = line[10:18]   # ddmmaaaa (8 chars)
+                time_str = line[18:22]   # hhmm (4 chars)
+                pis = line[22:34].strip()  # PIS (12 chars)
                 
                 day = int(date_str[0:2])
                 month = int(date_str[2:4])
@@ -262,18 +296,27 @@ class AFDParser:
         """
         Registro Tipo 5 — Cadastro de Funcionário.
         
-        Formato atual:
-        NSR(9) + "5"(1) + data(8) + hora(4) + op(1) + PIS(12) + Nome(52) + ...
+        Portaria 671:
+        NSR(9) + "5"(1) + data(8) + hora(4) + op(1) + PIS(12) + Nome(52)
+        Posição 10-17: data (8 chars)
+        Posição 18-21: hora (4 chars)
+        Posição 22: operação (1 char: I/A/E)
+        Posição 23-34: PIS (12 chars)
+        Posição 35-86: Nome (52 chars)
         
-        Formato REP_C:
-        NSR(9) + "5"(1) + datetime(25) + op(1) + PIS(12) + Nome(52) + ...
+        ControlID ISO:
+        NSR(9) + "5"(1) + datetime(25) + op(1) + PIS(12) + Nome(52)
+        Posição 35: operação
+        Posição 36-47: PIS
+        Posição 48-99: Nome
         """
         try:
-            if self.format_detected == "rep_c":
+            if self.format_detected == "controlid_iso":
                 op = line[35] if len(line) > 35 else ''
                 pis = line[36:48].strip()
                 name = line[48:100].strip() if len(line) > 48 else ''
             else:
+                # Portaria 671: posições fixas oficiais
                 op = line[22] if len(line) > 22 else ''
                 pis = line[23:35].strip()
                 name = line[35:87].strip() if len(line) > 35 else ''
