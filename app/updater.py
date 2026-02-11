@@ -20,7 +20,7 @@ from typing import Optional, Tuple, Callable
 # VERSÃO ATUAL DO APLICATIVO
 # Atualize aqui antes de cada nova release
 # =====================================================
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 GITHUB_OWNER = "SDRCasagrande"
 GITHUB_REPO = "bit-converter-ponto"
