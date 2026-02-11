@@ -607,42 +607,48 @@ class MainWindow(ctk.CTk):
         self._obs_entries = []   # [(workday, entry_widget)]
         self._punch_entries = [] # [(workday, [ent1, sai1, ent2, sai2])]
         
-        # === Header ===
-        header = ctk.CTkFrame(self.right_panel, fg_color=("#1a1a2e", "#1a1a2e"), height=50)
+        # === Header (two rows for better button visibility) ===
+        header = ctk.CTkFrame(self.right_panel, fg_color=("#1a1a2e", "#1a1a2e"))
         header.pack(fill='x')
-        header.pack_propagate(False)
+        
+        # Row 1: Back + Employee info
+        row1 = ctk.CTkFrame(header, fg_color="transparent")
+        row1.pack(fill='x', padx=5, pady=(5, 0))
         
         ctk.CTkButton(
-            header, text="← Voltar", width=80,
+            row1, text="← Voltar", width=80,
             command=self._back_to_list,
             fg_color="#3d3d5c", hover_color="#4d4d6c",
             font=("Segoe UI", 11)
-        ).pack(side='left', padx=10, pady=8)
+        ).pack(side='left', padx=5, pady=4)
         
         ctk.CTkLabel(
-            header, text=f"👤 {emp.display_name}",
+            row1, text=f"👤 {emp.display_name}",
             font=("Segoe UI", 14, "bold"), text_color="white"
-        ).pack(side='left', padx=10, pady=8)
+        ).pack(side='left', padx=10, pady=4)
         
         ctk.CTkLabel(
-            header, text=f"PIS: {emp.pis}",
+            row1, text=f"PIS: {emp.pis}",
             font=("Segoe UI", 10), text_color="#aaa"
-        ).pack(side='left', padx=5, pady=8)
+        ).pack(side='left', padx=5, pady=4)
         
-        # Botão exportar PDF individual
-        ctk.CTkButton(
-            header, text="📄 Gerar PDF", width=100,
-            command=self._export_preview_pdf,
-            fg_color="#c0392b", hover_color="#a93226",
-            font=("Segoe UI", 11)
-        ).pack(side='right', padx=5, pady=8)
+        # Row 2: Action buttons (always visible)
+        row2 = ctk.CTkFrame(header, fg_color="transparent")
+        row2.pack(fill='x', padx=5, pady=(2, 5))
         
         ctk.CTkButton(
-            header, text="💾 Salvar", width=90,
+            row2, text="💾 Salvar Alterações", width=140,
             command=self._save_all_changes,
             fg_color="#2a9d8f", hover_color="#21867a",
-            font=("Segoe UI", 11)
-        ).pack(side='right', padx=5, pady=8)
+            font=("Segoe UI", 11, "bold")
+        ).pack(side='left', padx=5, pady=4)
+        
+        ctk.CTkButton(
+            row2, text="📄 Gerar PDF", width=110,
+            command=self._export_preview_pdf,
+            fg_color="#c0392b", hover_color="#a93226",
+            font=("Segoe UI", 11, "bold")
+        ).pack(side='left', padx=5, pady=4)
         
         # === Info rápida ===
         total_expected = sum(wd.expected_hours for wd in emp.workdays)
