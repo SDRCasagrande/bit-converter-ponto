@@ -819,6 +819,48 @@ class SettingsWindow(ctk.CTkToplevel):
         self.lbl_schedule_info.pack(fill='x', pady=5)
         self._update_schedule_info()
         
+        # Separador
+        ctk.CTkFrame(scroll, height=2, fg_color="#444").pack(fill='x', pady=15)
+        
+        # === Sobre / Atualização ===
+        ctk.CTkLabel(
+            scroll, text="SOBRE / ATUALIZAÇÃO",
+            font=("Segoe UI", 14, "bold")
+        ).pack(fill='x', pady=(0, 5))
+        
+        # Versão atual
+        version_frame = ctk.CTkFrame(scroll, fg_color="#2a2a3e", corner_radius=8)
+        version_frame.pack(fill='x', pady=5)
+        
+        ctk.CTkLabel(
+            version_frame, text=f"Versão atual:  v{APP_VERSION}",
+            font=("Segoe UI", 12, "bold"), text_color="#e0e0ff"
+        ).pack(side='left', padx=12, pady=10)
+        
+        ctk.CTkLabel(
+            version_frame, text="Powered by BitKaiser Solution",
+            font=("Segoe UI", 9), text_color="#666"
+        ).pack(side='right', padx=12, pady=10)
+        
+        # Status da atualização
+        self.lbl_update_status = ctk.CTkLabel(
+            scroll, text="",
+            font=("Segoe UI", 10), text_color="#888"
+        )
+        self.lbl_update_status.pack(fill='x', pady=(5, 0))
+        
+        # Botão verificar
+        self.btn_check_update = ctk.CTkButton(
+            scroll, text="🔍  Verificar Atualização",
+            command=lambda: self._check_update_manual(),
+            height=36, font=("Segoe UI", 12),
+            fg_color="#e67e22", hover_color="#d35400"
+        )
+        self.btn_check_update.pack(fill='x', pady=(5, 5))
+        
+        # Separador
+        ctk.CTkFrame(scroll, height=2, fg_color="#444").pack(fill='x', pady=10)
+        
         # Botão salvar
         ctk.CTkButton(
             scroll, text="Salvar Configurações",
@@ -904,6 +946,58 @@ class SettingsWindow(ctk.CTkToplevel):
             pass
         
         self.destroy()
+    
+    def _check_update_manual(self):
+        """Verifica atualização manualmente."""
+        self.btn_check_update.configure(
+            text="⏳  Verificando...", state="disabled",
+            fg_color="#555"
+        )
+        self.lbl_update_status.configure(text="Conectando ao servidor...", text_color="#888")
+        self.update()
+        
+        def _do_check():
+            try:
+                has_update, info, msg = check_for_update()
+                self.after(0, lambda: self._show_update_result(has_update, info, msg))
+            except Exception as e:
+                self.after(0, lambda: self._show_update_result(False, None, f"Erro: {e}"))
+        
+        thread = threading.Thread(target=_do_check, daemon=True)
+        thread.start()
+    
+    def _show_update_result(self, has_update, info, msg):
+        """Mostra resultado da verificação."""
+        self.btn_check_update.configure(state="normal")
+        
+        if has_update and info:
+            self.lbl_update_status.configure(
+                text=f"✅ Nova versão disponível: v{info.version}  ({msg})",
+                text_color="#2a9d8f"
+            )
+            self.btn_check_update.configure(
+                text=f"⬇️  Baixar v{info.version}",
+                fg_color="#2d6a4f", hover_color="#40916c",
+                command=lambda: self._open_download(info)
+            )
+        else:
+            self.lbl_update_status.configure(
+                text=f"✅ Você está na versão mais recente (v{APP_VERSION})",
+                text_color="#2a9d8f"
+            )
+            self.btn_check_update.configure(
+                text="🔍  Verificar Atualização",
+                fg_color="#e67e22", hover_color="#d35400"
+            )
+    
+    def _open_download(self, info):
+        """Abre a URL de download no navegador."""
+        import webbrowser
+        webbrowser.open(info.download_url)
+        self.lbl_update_status.configure(
+            text="Download iniciado no navegador! Substitua o .exe antigo pelo novo.",
+            text_color="#e67e22"
+        )
 
 
 class ClockDialog(ctk.CTkToplevel):
