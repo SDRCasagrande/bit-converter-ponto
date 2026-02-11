@@ -191,7 +191,7 @@ class AFDParser:
         try:
             if self.format_detected == "controlid_iso":
                 cnpj_raw = line[10:24].strip()
-                razao = line[38:188].strip() if len(line) > 38 else ''
+                razao = line[39:189].strip() if len(line) > 39 else ''
             else:
                 # Portaria 671 standard
                 # Posição 10: tipo ID (1 char)
@@ -237,15 +237,15 @@ class AFDParser:
         Posição 18-21: hora
         Posição 22-33: PIS
         
-        ControlID ISO (47+ chars):
-        NSR(9) + "3"(1) + datetime(25 ISO8601) + PIS(12)
-        Posição 10-34: datetime
-        Posição 35-46: PIS
+        ControlID ISO (46+ chars):
+        NSR(9) + "3"(1) + datetime(24 ISO8601) + PIS(12)
+        Posição 10-33: datetime (24 chars: 2026-01-08T09:15:00-0300)
+        Posição 34-45: PIS
         """
         try:
             if self.format_detected == "controlid_iso":
-                # ControlID proprietário: ISO datetime
-                dt_str = line[10:35]
+                # ControlID proprietário: ISO datetime (24 chars)
+                dt_str = line[10:34]
                 match = self.ISO_DT_PATTERN.match(dt_str)
                 if not match:
                     return
@@ -256,7 +256,7 @@ class AFDParser:
                 hour = int(match.group(4))
                 minute = int(match.group(5))
                 
-                pis = line[35:47].strip()
+                pis = line[34:46].strip()
             else:
                 # Portaria 671: posições fixas
                 date_str = line[10:18]   # ddmmaaaa (8 chars)
@@ -305,16 +305,16 @@ class AFDParser:
         Posição 35-86: Nome (52 chars)
         
         ControlID ISO:
-        NSR(9) + "5"(1) + datetime(25) + op(1) + PIS(12) + Nome(52)
-        Posição 35: operação
-        Posição 36-47: PIS
-        Posição 48-99: Nome
+        NSR(9) + "5"(1) + datetime(24) + op(1) + PIS(12) + Nome(52)
+        Posição 34: operação
+        Posição 35-46: PIS
+        Posição 47-98: Nome
         """
         try:
             if self.format_detected == "controlid_iso":
-                op = line[35] if len(line) > 35 else ''
-                pis = line[36:48].strip()
-                name = line[48:100].strip() if len(line) > 48 else ''
+                op = line[34] if len(line) > 34 else ''
+                pis = line[35:47].strip()
+                name = line[47:99].strip() if len(line) > 47 else ''
             else:
                 # Portaria 671: posições fixas oficiais
                 op = line[22] if len(line) > 22 else ''
