@@ -23,19 +23,31 @@ class WorkCalculator:
         employee: Employee, 
         punches: List[Punch],
         month: int, 
-        year: int
+        year: int,
+        start_date: date = None,
+        end_date: date = None
     ) -> Employee:
         """
-        Processa todas as marcações de um funcionário para um mês.
-        Retorna o Employee com workdays calculados.
+        Processa todas as marcações de um funcionário.
+        Se start_date/end_date forem fornecidos, filtra por período.
+        Caso contrário, usa o mês completo.
         """
         schedule = employee.schedule or self.default_schedule
         
-        # Agrupa marcações por dia
+        # Define período
+        if start_date and end_date:
+            period_start = start_date
+            period_end = end_date
+        else:
+            _, days_in_month = monthrange(year, month)
+            period_start = date(year, month, 1)
+            period_end = date(year, month, days_in_month)
+        
+        # Agrupa marcações por dia (dentro do período)
         punches_by_day: Dict[date, List[Punch]] = {}
         for punch in punches:
-            if punch.datetime.month == month and punch.datetime.year == year:
-                day = punch.date
+            day = punch.date
+            if period_start <= day <= period_end:
                 if day not in punches_by_day:
                     punches_by_day[day] = []
                 punches_by_day[day].append(punch)
@@ -44,20 +56,14 @@ class WorkCalculator:
         for day in punches_by_day:
             punches_by_day[day].sort(key=lambda p: p.datetime)
         
-        # Gera WorkDays para todos os dias do mês
-        _, days_in_month = monthrange(year, month)
+        # Gera WorkDays para todos os dias do período
         employee.workdays = []
-        
-        for day_num in range(1, days_in_month + 1):
-            current_date = date(year, month, day_num)
-            day_punches = punches_by_day.get(current_date, [])
-            
-            workday = self._calculate_workday(
-                current_date, 
-                day_punches, 
-                schedule
-            )
+        current = period_start
+        while current <= period_end:
+            day_punches = punches_by_day.get(current, [])
+            workday = self._calculate_workday(current, day_punches, schedule)
             employee.workdays.append(workday)
+            current += timedelta(days=1)
         
         return employee
     
@@ -94,7 +100,7 @@ class WorkCalculator:
             # Apenas 1 marcação — esqueceu de bater saída (ou entrada)
             workday.worked_hours = 0.0
             workday.deficit_hours = expected if is_workday else 0.0
-            workday.observation = "Marcação incompleta (1 batida — falta entrada ou saída)"
+            workday.observation = "Marcação incompleta (1 batida)"
             workday.is_incomplete = True
             if is_workday:
                 workday.is_absent = True
@@ -102,12 +108,12 @@ class WorkCalculator:
         
         if num_punches % 2 != 0:
             # 3, 5 marcações — uma batida sem par
-            workday.observation = f"Marcação ímpar ({num_punches} batidas — falta 1 registro)"
+            workday.observation = f"Marcação ímpar ({num_punches} batidas)"
             workday.is_incomplete = True
         
         if num_punches == 2 and is_workday and expected > 6:
             # Jornada > 6h com apenas 2 marcações — não registrou intervalo
-            workday.observation = "Jornada contínua (sem intervalo registrado)"
+            workday.observation = "Jornada contínua (sem intervalo)"
         
         if not is_workday and punches:
             # Trabalhou em dia de folga — tudo é hora extra
@@ -141,7 +147,7 @@ class WorkCalculator:
             # Limita a 2h extras/dia (CLT)
             workday.overtime_hours = min(overtime, schedule.max_daily_overtime_hours)
             if overtime > schedule.max_daily_overtime_hours:
-                workday.observation = f"Excedeu limite de {schedule.max_daily_overtime_hours}h extras"
+                workday.observation = f"Excedeu {schedule.max_daily_overtime_hours}h extras"
         elif worked < expected - (schedule.tolerance_minutes / 60):
             workday.deficit_hours = expected - worked
         
@@ -152,8 +158,8 @@ class WorkCalculator:
         if expected > 6 and workday.break_minutes < 60:
             if workday.break_minutes > 0:
                 workday.observation = (
-                    f"Intervalo insuficiente: {workday.break_minutes:.0f}min "
-                    f"(mínimo 60min)"
+                    f"Intervalo {workday.break_minutes:.0f}min "
+                    f"(mín. 60min)"
                 )
         
         return workday
@@ -273,20 +279,30 @@ class WorkCalculator:
         punches: List[Punch],
         company: Company,
         month: int,
-        year: int
+        year: int,
+        start_date: date = None,
+        end_date: date = None
     ) -> MonthlyReport:
-        """Gera o relatório mensal completo para todos os funcionários."""
+        """Gera o relatório para todos os funcionários.
+        Se start_date/end_date forem fornecidos, filtra por período.
+        Caso contrário, usa o mês completo.
+        """
         report = MonthlyReport(
             company=company,
             month=month,
             year=year,
+            start_date=start_date,
+            end_date=end_date,
             employees=[],
             generated_at=datetime.now()
         )
         
         for pis, employee in employees.items():
             emp_punches = [p for p in punches if p.pis == pis]
-            processed = self.process_employee(employee, emp_punches, month, year)
+            processed = self.process_employee(
+                employee, emp_punches, month, year,
+                start_date=start_date, end_date=end_date
+            )
             report.employees.append(processed)
         
         # Ordena por nome

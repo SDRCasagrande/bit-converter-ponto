@@ -12,6 +12,7 @@ Referência: https://www.controlid.com.br/suporte/api/
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 import tempfile
 import os
@@ -133,77 +134,102 @@ class ControlIDClient:
             ("http", 4370),
         ]
         
+        content_types = ["json", "form"]
+        
         for proto, port in attempts:
-            try:
-                self.device.protocol = proto
-                self.device.port = port
-                self._update_base_url()
-                
-                body = json.dumps({
-                    "login": self.device.login,
-                    "password": self.device.password
-                }).encode('utf-8')
-                
-                req = urllib.request.Request(
-                    f"{self.base_url}/login.fcgi",
-                    data=body,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Content-Length': str(len(body)),
-                    },
-                    method='POST'
-                )
-                
-                ctx = self._ssl_ctx if proto == 'https' else None
-                
-                with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                    content = resp.read().decode('utf-8')
-                    result = json.loads(content)
+            self.device.protocol = proto
+            self.device.port = port
+            self._update_base_url()
+            
+            for ct in content_types:
+                try:
+                    result = self._login_request(ct)
                     if "session" in result:
                         self.device.session = result["session"]
-                        return True, f"Conectado via {proto.upper()}:{port}"
-                        
-            except Exception:
-                continue
+                        return True, f"Conectado via {proto.upper()}:{port} ({ct})"
+                except Exception:
+                    continue
         
         return False, "Nenhum protocolo funcionou"
+    
+    def _login_request(self, content_type: str = "json") -> dict:
+        """
+        Tenta login com o tipo de conteúdo especificado.
+        content_type: 'json' ou 'form'
+        """
+        url = f"{self.base_url}/login.fcgi"
+        login_data = {
+            "login": self.device.login,
+            "password": self.device.password
+        }
+        
+        if content_type == "form":
+            body = urllib.parse.urlencode(login_data).encode('utf-8')
+            ct_header = 'application/x-www-form-urlencoded'
+        else:
+            body = json.dumps(login_data).encode('utf-8')
+            ct_header = 'application/json'
+        
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                'Content-Type': ct_header,
+                'Content-Length': str(len(body)),
+            },
+            method='POST'
+        )
+        
+        ctx = self._ssl_ctx if self.device.protocol == 'https' else None
+        
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            content = resp.read().decode('utf-8')
+            if content.strip():
+                return json.loads(content)
+            return {}
     
     def connect(self) -> bool:
         """
         Autentica no relógio e obtém sessão.
-        Tenta auto-detecção de protocolo se a primeira tentativa falhar.
+        Tenta JSON primeiro, depois form-urlencoded, depois auto-detecção.
         Retorna True se conectou com sucesso.
         """
-        # Tenta com as configurações atuais primeiro
+        # 1) Tenta JSON (padrão)
         try:
-            result = self._request("login.fcgi", {
-                "login": self.device.login,
-                "password": self.device.password
-            })
-            
+            result = self._login_request("json")
             if "session" in result:
                 self.device.session = result["session"]
                 return True
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                # Firmware pode não aceitar JSON, tenta form-urlencoded
+                pass
             else:
-                # Tenta auto-detecção
-                ok, msg = self._auto_detect_protocol()
-                if ok:
-                    return True
-                raise ConnectionError("Login falhou — verifique usuario e senha.")
-                
-        except ConnectionError as e:
-            # Se deu erro de conexão, tenta outros protocolos
-            if "HTTP" in str(e) or "conectar" in str(e):
-                ok, msg = self._auto_detect_protocol()
-                if ok:
-                    return True
-            raise
-        except Exception as e:
-            # Tenta auto-detecção como fallback
-            ok, msg = self._auto_detect_protocol()
-            if ok:
+                pass
+        except Exception:
+            pass
+        
+        # 2) Tenta form-urlencoded (firmware antigo do iDClass)
+        try:
+            result = self._login_request("form")
+            if "session" in result:
+                self.device.session = result["session"]
                 return True
-            raise ConnectionError(f"Erro ao conectar: {e}")
+        except Exception:
+            pass
+        
+        # 3) Auto-detecção de protocolo/porta com ambos os formatos
+        ok, msg = self._auto_detect_protocol()
+        if ok:
+            return True
+        
+        raise ConnectionError(
+            "Não foi possível conectar ao relógio.\n"
+            "Verifique:\n"
+            "• IP correto (visível no display do relógio)\n"
+            "• Usuário e senha da API (padrão: admin/admin)\n"
+            "• Relógio ligado e na mesma rede"
+        )
     
     def get_device_info(self) -> dict:
         """Obtém informações do equipamento."""

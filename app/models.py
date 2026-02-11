@@ -22,7 +22,7 @@ class ScheduleType(Enum):
 @dataclass
 class ScheduleConfig:
     """Configuração de escala de trabalho."""
-    schedule_type: ScheduleType = ScheduleType.SCALE_5X2
+    schedule_type: ScheduleType = ScheduleType.SCALE_6X1
     # Horários padrão
     entry_time: time = field(default_factory=lambda: time(8, 0))
     exit_time: time = field(default_factory=lambda: time(18, 0))
@@ -34,7 +34,7 @@ class ScheduleConfig:
     tolerance_minutes: int = 10
     # Jornada parcial
     weekly_hours: float = 44.0
-    daily_hours: float = 8.8  # 8h48 para 5x2 (44h/sem)
+    daily_hours: float = 8.0  # 8h para 6x1 seg-sex (+ 4h sáb = 44h/sem)
     # Sábado (para escala padrão/6x1)
     saturday_hours: float = 4.0
     saturday_entry: time = field(default_factory=lambda: time(8, 0))
@@ -43,7 +43,7 @@ class ScheduleConfig:
     overtime_premium: float = 0.50  # 50% mínimo CLT
     max_daily_overtime_hours: float = 2.0  # Limite CLT: 2h extras/dia
     # Dias de trabalho (0=segunda, 6=domingo)
-    workdays: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])  # seg-sex
+    workdays: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])  # seg-sáb
 
 
 @dataclass
@@ -123,6 +123,8 @@ class Employee:
     pis: str = ""
     name: str = ""
     employee_id: str = ""
+    cargo: str = ""        # Cargo / função
+    department: str = ""    # Departamento
     schedule: Optional[ScheduleConfig] = None  # Override da escala padrão
     workdays: List[WorkDay] = field(default_factory=list)
     
@@ -161,13 +163,21 @@ class MonthlyReport:
     company: Company = field(default_factory=Company)
     month: int = 1
     year: int = 2026
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     employees: List[Employee] = field(default_factory=list)
     generated_at: datetime = field(default_factory=datetime.now)
     
     @property
     def period_label(self) -> str:
+        if self.start_date and self.end_date:
+            return (
+                f"DE {self.start_date.strftime('%d/%m/%Y')} "
+                f"ATÉ {self.end_date.strftime('%d/%m/%Y')}"
+            )
         months = [
             '', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
             'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
         ]
         return f"{months[self.month]}/{self.year}"
+

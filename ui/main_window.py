@@ -36,7 +36,26 @@ SCHEDULE_LABELS = {
 
 SCHEDULE_FROM_LABEL = {v: k for k, v in SCHEDULE_LABELS.items()}
 
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'config.json')
+# Config persistente no AppData do Windows (sobrevive a atualizações do programa)
+_OLD_CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'config.json')
+
+
+def _get_config_path() -> str:
+    """Retorna o caminho do config.json no AppData do usuário."""
+    appdata = os.environ.get('APPDATA', '')
+    if appdata:
+        config_dir = os.path.join(appdata, 'BitConverter')
+    else:
+        # Fallback: pasta do programa
+        config_dir = os.path.dirname(os.path.abspath(__file__))
+        config_dir = os.path.join(config_dir, '..')
+    
+    config_dir = os.path.abspath(config_dir)
+    os.makedirs(config_dir, exist_ok=True)
+    return os.path.join(config_dir, 'config.json')
+
+
+CONFIG_FILE = _get_config_path()
 
 
 class MainWindow(ctk.CTk):
@@ -49,6 +68,27 @@ class MainWindow(ctk.CTk):
         self.title("Bit-Converter — Conversor de AFD Relógio de Ponto para PDF | BitKaiser Solution")
         self.geometry("960x680")
         self.minsize(800, 600)
+        
+        # Ícone da janela
+        try:
+            icon_path = os.path.join(
+                getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(__file__))),
+                'assets', 'icon.ico'
+            )
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
+                # Também define ícone da taskbar
+                from PIL import Image, ImageTk
+                logo_path = os.path.join(
+                    getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(__file__))),
+                    'assets', 'logopng.png'
+                )
+                if os.path.exists(logo_path):
+                    logo_img = Image.open(logo_path).resize((64, 64), Image.LANCZOS)
+                    self._icon_photo = ImageTk.PhotoImage(logo_img)
+                    self.wm_iconphoto(True, self._icon_photo)
+        except Exception:
+            pass
         
         # Tema
         ctk.set_appearance_mode("dark")
@@ -210,6 +250,24 @@ class MainWindow(ctk.CTk):
         )
         self.month_dropdown.pack(fill='x')
         
+        # Filtro de período (Data Início / Data Fim)
+        date_frame = ctk.CTkFrame(section_month, fg_color="transparent")
+        date_frame.pack(fill='x', pady=(8, 0))
+        
+        # Data Início
+        row1 = ctk.CTkFrame(date_frame, fg_color="transparent")
+        row1.pack(fill='x', pady=2)
+        ctk.CTkLabel(row1, text="Início:", font=("Segoe UI", 10), width=50).pack(side='left')
+        self.entry_start_date = ctk.CTkEntry(row1, height=28, placeholder_text="dd/mm/aaaa")
+        self.entry_start_date.pack(side='left', fill='x', expand=True, padx=(5, 0))
+        
+        # Data Fim
+        row2 = ctk.CTkFrame(date_frame, fg_color="transparent")
+        row2.pack(fill='x', pady=2)
+        ctk.CTkLabel(row2, text="Fim:", font=("Segoe UI", 10), width=50).pack(side='left')
+        self.entry_end_date = ctk.CTkEntry(row2, height=28, placeholder_text="dd/mm/aaaa")
+        self.entry_end_date.pack(side='left', fill='x', expand=True, padx=(5, 0))
+        
         # Escala
         section_schedule = ctk.CTkFrame(self.left_panel, fg_color="transparent")
         section_schedule.pack(fill='x', padx=10, pady=10)
@@ -220,7 +278,7 @@ class MainWindow(ctk.CTk):
         ).pack(fill='x', pady=(0, 5))
         
         self.schedule_var = ctk.StringVar(
-            value=SCHEDULE_LABELS.get(self.schedule.schedule_type, "5x2")
+            value=SCHEDULE_LABELS.get(self.schedule.schedule_type, "6x1 (7h20/dia média, 6 dias = 44h/sem)")
         )
         self.schedule_dropdown = ctk.CTkOptionMenu(
             section_schedule, variable=self.schedule_var,
@@ -367,7 +425,16 @@ class MainWindow(ctk.CTk):
             self.selected_month = month
             self.selected_year = year
             
-            # Auto-processa ao trocar de mes
+            # Auto-preenche período com mês completo
+            from calendar import monthrange
+            _, days = monthrange(year, month)
+            
+            self.entry_start_date.delete(0, 'end')
+            self.entry_start_date.insert(0, f"01/{month:02d}/{year}")
+            self.entry_end_date.delete(0, 'end')
+            self.entry_end_date.insert(0, f"{days:02d}/{month:02d}/{year}")
+            
+            # Auto-processa ao trocar de mês
             if self.parser:
                 self._process()
         except (ValueError, IndexError):
@@ -375,7 +442,7 @@ class MainWindow(ctk.CTk):
     
     def _on_schedule_changed(self, value: str):
         """Callback quando a escala é alterada."""
-        stype = SCHEDULE_FROM_LABEL.get(value, ScheduleType.SCALE_5X2)
+        stype = SCHEDULE_FROM_LABEL.get(value, ScheduleType.SCALE_6X1)
         self.schedule.schedule_type = stype
         
         # Ajusta parâmetros conforme escala
@@ -403,6 +470,15 @@ class MainWindow(ctk.CTk):
         
         self._save_config()
     
+    def _parse_date_entry(self, text: str):
+        """Converte dd/mm/yyyy para date, ou None se inválido."""
+        try:
+            from datetime import date as dt_date
+            parts = text.strip().split('/')
+            return dt_date(int(parts[2]), int(parts[1]), int(parts[0]))
+        except (ValueError, IndexError):
+            return None
+    
     def _process(self):
         """Processa o arquivo AFD com a escala selecionada."""
         if not self.parser or not self.selected_month:
@@ -412,13 +488,22 @@ class MainWindow(ctk.CTk):
         self.status_label.configure(text="⏳ Processando marcações...")
         self.update()
         
+        # Lê período customizado
+        start_date = self._parse_date_entry(self.entry_start_date.get())
+        end_date = self._parse_date_entry(self.entry_end_date.get())
+        
+        # Sincroniza escala ativa com a empresa (usado pelo PDF)
+        self.company.default_schedule = self.schedule
+        
         calculator = WorkCalculator(default_schedule=self.schedule)
         self.report = calculator.generate_report(
             employees=self.parser.employees,
             punches=self.parser.punches,
             company=self.company,
             month=self.selected_month,
-            year=self.selected_year
+            year=self.selected_year,
+            start_date=start_date,
+            end_date=end_date
         )
         
         # Atualiza lista de colaboradores
@@ -431,6 +516,7 @@ class MainWindow(ctk.CTk):
         total_extra = sum(e.total_overtime_hours for e in self.report.employees)
         total_faltas = sum(e.total_absent_days for e in self.report.employees)
         
+        period_str = self.report.period_label
         self.status_label.configure(
             text=f"✅ Processado! {len(self.report.employees)} colaboradores | "
                  f"Extras: {total_extra:.1f}h | Faltas: {total_faltas} dias"
@@ -451,7 +537,7 @@ class MainWindow(ctk.CTk):
             return
         
         for emp in self.report.employees:
-            card = ctk.CTkFrame(self.employees_scroll, height=80)
+            card = ctk.CTkFrame(self.employees_scroll, height=90, cursor="hand2")
             card.pack(fill='x', pady=3)
             card.pack_propagate(False)
             
@@ -494,6 +580,326 @@ class MainWindow(ctk.CTk):
                 stats_frame, text=stats_text,
                 font=("Segoe UI", 10), text_color=stats_color, anchor='w'
             ).pack(fill='x')
+            
+            # Hint de clique
+            ctk.CTkLabel(
+                info_frame, text="🔍 Clique para ver detalhes",
+                font=("Segoe UI", 9), text_color="#666", anchor='e'
+            ).pack(fill='x')
+            
+            # Click handler - vincula em todos os filhos do card
+            def _on_click(e, employee=emp):
+                self._show_employee_preview(employee)
+            card.bind("<Button-1>", _on_click)
+            for child in card.winfo_children():
+                child.bind("<Button-1>", _on_click)
+                for grandchild in child.winfo_children():
+                    grandchild.bind("<Button-1>", _on_click)
+                    for ggchild in grandchild.winfo_children():
+                        ggchild.bind("<Button-1>", _on_click)
+    
+    def _show_employee_preview(self, emp):
+        """Mostra preview detalhado — estilo planilha RHiD editável."""
+        for widget in self.right_panel.winfo_children():
+            widget.destroy()
+        
+        self._preview_emp = emp
+        self._obs_entries = []   # [(workday, entry_widget)]
+        self._punch_entries = [] # [(workday, [ent1, sai1, ent2, sai2])]
+        
+        # === Header ===
+        header = ctk.CTkFrame(self.right_panel, fg_color=("#1a1a2e", "#1a1a2e"), height=50)
+        header.pack(fill='x')
+        header.pack_propagate(False)
+        
+        ctk.CTkButton(
+            header, text="← Voltar", width=80,
+            command=self._back_to_list,
+            fg_color="#3d3d5c", hover_color="#4d4d6c",
+            font=("Segoe UI", 11)
+        ).pack(side='left', padx=10, pady=8)
+        
+        ctk.CTkLabel(
+            header, text=f"👤 {emp.display_name}",
+            font=("Segoe UI", 14, "bold"), text_color="white"
+        ).pack(side='left', padx=10, pady=8)
+        
+        ctk.CTkLabel(
+            header, text=f"PIS: {emp.pis}",
+            font=("Segoe UI", 10), text_color="#aaa"
+        ).pack(side='left', padx=5, pady=8)
+        
+        # Botão exportar PDF individual
+        ctk.CTkButton(
+            header, text="📄 Gerar PDF", width=100,
+            command=self._export_preview_pdf,
+            fg_color="#c0392b", hover_color="#a93226",
+            font=("Segoe UI", 11)
+        ).pack(side='right', padx=5, pady=8)
+        
+        ctk.CTkButton(
+            header, text="💾 Salvar", width=90,
+            command=self._save_all_changes,
+            fg_color="#2a9d8f", hover_color="#21867a",
+            font=("Segoe UI", 11)
+        ).pack(side='right', padx=5, pady=8)
+        
+        # === Info rápida ===
+        total_expected = sum(wd.expected_hours for wd in emp.workdays)
+        bank = emp.total_overtime_hours - emp.total_deficit_hours
+        
+        info_bar = ctk.CTkFrame(self.right_panel, fg_color=("#2d2d44", "#2d2d44"), height=35)
+        info_bar.pack(fill='x')
+        info_bar.pack_propagate(False)
+        
+        bank_sign = "+" if bank >= 0 else ""
+        bank_color = "#2a9d8f" if bank >= 0 else "#e63946"
+        
+        info_items = [
+            (f"Trab: {emp.total_worked_hours:.1f}h", "#ccc"),
+            (f"Prev: {total_expected:.1f}h", "#ccc"),
+            (f"Extras: +{emp.total_overtime_hours:.1f}h", "#2a9d8f"),
+            (f"Déficit: -{emp.total_deficit_hours:.1f}h", "#e63946"),
+            (f"Faltas: {emp.total_absent_days}", "#f4a261"),
+            (f"Banco: {bank_sign}{bank:.1f}h", bank_color),
+        ]
+        for txt, color in info_items:
+            ctk.CTkLabel(
+                info_bar, text=txt,
+                font=("Segoe UI", 10, "bold"), text_color=color
+            ).pack(side='left', padx=8, pady=5)
+        
+        # === Tabela scrollável ===
+        table_frame = ctk.CTkScrollableFrame(self.right_panel, fg_color="transparent")
+        table_frame.pack(fill='both', expand=True, padx=0, pady=0)
+        
+        # Cabeçalho da tabela (vermelho RHiD)
+        hdr = ctk.CTkFrame(table_frame, fg_color=("#c0392b", "#c0392b"), height=26)
+        hdr.pack(fill='x', pady=(0, 1))
+        hdr.pack_propagate(False)
+        
+        W = {"dia": 70, "prev": 40, "ent": 42, "trab": 42, "ef": 65, "obs": 130}
+        hdr_cols = [
+            ("DIA", W["dia"]), ("PREV", W["prev"]),
+            ("ENT.1", W["ent"]), ("SAÍ.1", W["ent"]),
+            ("ENT.2", W["ent"]), ("SAÍ.2", W["ent"]),
+            ("TRAB", W["trab"]), ("EXTRA/FALTA", W["ef"]),
+            ("OBS.", W["obs"])
+        ]
+        for label, w in hdr_cols:
+            ctk.CTkLabel(
+                hdr, text=label, width=w,
+                font=("Segoe UI", 8, "bold"), text_color="white"
+            ).pack(side='left', padx=0)
+        
+        DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+        
+        for idx, wd in enumerate(emp.workdays):
+            weekday = wd.date.weekday()
+            day_str = f"{wd.date.strftime('%d/%m')} {DIAS[weekday]}"
+            
+            # Cor de fundo alternada + estados
+            if wd.is_absent and wd.is_workday and not wd.punches:
+                bg = ("#ffe0e0", "#3d1f1f")
+            elif not wd.is_workday and not wd.punches:
+                bg = ("#f0f0f0", "#252525")
+            elif wd.is_incomplete:
+                bg = ("#fff3e0", "#3d2f1f")
+            elif idx % 2 == 0:
+                bg = ("transparent", "transparent")
+            else:
+                bg = ("#f8f8f8", "#1e1e2e")
+            
+            row = ctk.CTkFrame(table_frame, fg_color=bg, height=22)
+            row.pack(fill='x', pady=0)
+            row.pack_propagate(False)
+            
+            # DIA
+            ctk.CTkLabel(
+                row, text=day_str, width=W["dia"],
+                font=("Segoe UI", 9, "bold"), anchor='w'
+            ).pack(side='left', padx=1)
+            
+            # PREVISTO
+            if wd.expected_hours > 0:
+                h = int(wd.expected_hours)
+                m = int((wd.expected_hours % 1) * 60)
+                prev = f"{h}h{m:02d}"
+            else:
+                prev = ""
+            ctk.CTkLabel(
+                row, text=prev, width=W["prev"],
+                font=("Segoe UI", 9), anchor='center'
+            ).pack(side='left', padx=0)
+            
+            # ENT.1, SAÍ.1, ENT.2, SAÍ.2 — todos editáveis
+            punches = wd.punches
+            p_times = [p.time.strftime('%H:%M') for p in punches]
+            
+            cells = ['', '', '', '']
+            if not wd.is_workday and not punches:
+                pass  # mantém vazio
+            elif wd.is_absent and wd.is_workday and not punches:
+                pass  # mantém vazio
+            elif len(punches) >= 4:
+                cells = p_times[:4]
+            elif len(punches) == 2 and punches[0].time.hour >= 11:
+                cells = ['', '', p_times[0], p_times[1]]
+            elif len(punches) == 2:
+                cells = [p_times[0], '', '', p_times[1]]
+            else:
+                for pi in range(min(4, len(punches))):
+                    cells[pi] = p_times[pi]
+            
+            punch_row_entries = []
+            for val in cells:
+                pe = ctk.CTkEntry(
+                    row, width=W["ent"], height=20,
+                    font=("Segoe UI", 8), border_width=1,
+                    fg_color=("#fff", "#2b2b2b"),
+                    justify='center'
+                )
+                pe.pack(side='left', padx=0)
+                if val:
+                    pe.insert(0, val)
+                punch_row_entries.append(pe)
+            self._punch_entries.append((wd, punch_row_entries))
+            
+            # TRAB
+            trab = f"{wd.worked_hours:.1f}" if wd.worked_hours > 0 else ""
+            ctk.CTkLabel(
+                row, text=trab, width=W["trab"],
+                font=("Segoe UI", 9), anchor='center'
+            ).pack(side='left', padx=0)
+            
+            # EXTRA/FALTA
+            if wd.overtime_hours > 0:
+                ef = f"+{wd.overtime_hours:.1f}h"
+                efc = "#2a9d8f"
+            elif wd.deficit_hours > 0:
+                ef = f"-{wd.deficit_hours:.1f}h"
+                efc = "#e63946"
+            elif wd.is_late:
+                ef = f"↓{int(wd.late_minutes)}min"
+                efc = "#f4a261"
+            else:
+                ef = ""
+                efc = "#aaa"
+            ctk.CTkLabel(
+                row, text=ef, width=W["ef"],
+                font=("Segoe UI", 9, "bold"), text_color=efc, anchor='center'
+            ).pack(side='left', padx=0)
+            
+            # OBS — editável
+            obs_e = ctk.CTkEntry(
+                row, width=W["obs"], height=20,
+                font=("Segoe UI", 8), border_width=1,
+                fg_color=("#fff", "#2b2b2b"),
+                placeholder_text=""
+            )
+            obs_e.pack(side='left', padx=1)
+            if wd.observation:
+                obs_e.insert(0, wd.observation)
+            self._obs_entries.append((wd, obs_e))
+    
+    def _save_all_changes(self):
+        """Salva todas as alterações (horários + observações) no modelo."""
+        from datetime import time as dt_time
+        from app.models import Punch
+        
+        changes = 0
+        # Salvar observações
+        if hasattr(self, '_obs_entries'):
+            for wd, entry in self._obs_entries:
+                new_obs = entry.get().strip()
+                if new_obs != (wd.observation or ""):
+                    changes += 1
+                wd.observation = new_obs
+        
+        # Salvar horários editados
+        if hasattr(self, '_punch_entries'):
+            for wd, entries in self._punch_entries:
+                new_punches = []
+                for e in entries:
+                    val = e.get().strip()
+                    if val:
+                        try:
+                            parts = val.replace('h', ':').split(':')
+                            h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+                            new_punches.append(Punch(time=dt_time(h, m)))
+                        except (ValueError, IndexError):
+                            pass
+                
+                # Só atualiza se houve mudança
+                old_times = [p.time.strftime('%H:%M') for p in wd.punches]
+                new_times = [p.time.strftime('%H:%M') for p in new_punches]
+                if old_times != new_times:
+                    wd.punches = new_punches
+                    changes += 1
+        
+        # Recalcular horas se houve mudanças nos horários
+        if changes > 0 and hasattr(self, '_preview_emp'):
+            try:
+                from app.calculator import WorkCalculator
+                calc = WorkCalculator(default_schedule=self.schedule)
+                for wd in self._preview_emp.workdays:
+                    if wd.punches:
+                        wd.worked_hours = calc._calculate_worked_hours(wd.punches)
+                        diff = wd.worked_hours - wd.expected_hours
+                        wd.overtime_hours = max(0, diff)
+                        wd.deficit_hours = max(0, -diff)
+            except Exception as ex:
+                print(f"[Recalc] Erro: {ex}")
+        
+        self.status_label.configure(
+            text=f"✅ {changes} alteração(ões) salva(s)! Serão refletidas no PDF."
+        )
+        
+        # Atualiza preview pra refletir recálculos
+        if changes > 0 and hasattr(self, '_preview_emp'):
+            self._show_employee_preview(self._preview_emp)
+    
+    def _export_preview_pdf(self):
+        """Exporta PDF somente do funcionário selecionado."""
+        if not hasattr(self, '_preview_emp') or not self.report:
+            return
+        
+        # Salva alterações antes de exportar
+        self._save_all_changes()
+        
+        from tkinter import filedialog
+        filepath = filedialog.asksaveasfilename(
+            title="Salvar PDF do funcionário",
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Ponto_{self._preview_emp.display_name.replace(' ', '_')}.pdf"
+        )
+        if not filepath:
+            return
+        
+        self.status_label.configure(text="⏳ Gerando PDF...")
+        self.update()
+        
+        try:
+            from app.pdf_export import PDFExporter
+            import os
+            exporter = PDFExporter()
+            exporter.export_employee(
+                self.report, self._preview_emp, filepath
+            )
+            self.status_label.configure(
+                text=f"✅ PDF gerado: {os.path.basename(filepath)}"
+            )
+        except Exception as e:
+            self.status_label.configure(text=f"❌ Erro: {e}")
+    
+    def _back_to_list(self):
+        """Volta para a lista de colaboradores (auto-salva)."""
+        self._save_all_changes()
+        for widget in self.right_panel.winfo_children():
+            widget.destroy()
+        self._build_right_panel()
+        self._update_employee_list()
     
     def _export_individual(self):
         """Exporta PDFs individuais."""
@@ -527,11 +933,13 @@ class MainWindow(ctk.CTk):
         if not self.report:
             return
         
+        import re
+        safe_period = re.sub(r'[^\w]', '_', self.report.period_label)
         filepath = filedialog.asksaveasfilename(
             title="Salvar PDF Consolidado",
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
-            initialfile=f"Ponto_Consolidado_{self.report.period_label.replace('/', '_')}.pdf"
+            initialfile=f"Ponto_Consolidado_{safe_period}.pdf"
         )
         
         if not filepath:
@@ -624,7 +1032,7 @@ class MainWindow(ctk.CTk):
     # ========= CONFIG PERSISTÊNCIA =========
     
     def _save_config(self):
-        """Salva configurações em JSON local."""
+        """Salva configurações em JSON local (AppData)."""
         try:
             config = {
                 'company': {
@@ -651,18 +1059,29 @@ class MainWindow(ctk.CTk):
                 }
             }
             
-            config_path = os.path.abspath(CONFIG_FILE)
+            config_path = CONFIG_FILE
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+            print(f"[Config] Salvo em: {config_path}")
+        except Exception as e:
+            print(f"[Config] Erro ao salvar: {e}")
     
     def _load_config(self):
-        """Carrega configurações do JSON local."""
+        """Carrega configurações do JSON local (AppData)."""
         try:
-            config_path = os.path.abspath(CONFIG_FILE)
+            config_path = CONFIG_FILE
+            
+            # Migração: se não existe no AppData mas existe na pasta antiga
             if not os.path.exists(config_path):
-                return
+                old_path = os.path.abspath(_OLD_CONFIG_FILE)
+                if os.path.exists(old_path):
+                    import shutil
+                    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                    shutil.copy2(old_path, config_path)
+                    print(f"[Config] Migrado de {old_path} → {config_path}")
+                else:
+                    return  # Sem config salvo ainda
             
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
@@ -679,7 +1098,7 @@ class MainWindow(ctk.CTk):
             
             # Schedule
             s = config.get('schedule', {})
-            stype = s.get('type', '5x2')
+            stype = s.get('type', '6x1')
             for st in ScheduleType:
                 if st.value == stype:
                     self.schedule.schedule_type = st
@@ -695,13 +1114,15 @@ class MainWindow(ctk.CTk):
                 self.schedule.exit_time = time(int(h), int(m))
             
             self.schedule.tolerance_minutes = s.get('tolerance', 10)
-            self.schedule.daily_hours = s.get('daily_hours', 8.8)
+            self.schedule.daily_hours = s.get('daily_hours', 8.0)
             self.schedule.weekly_hours = s.get('weekly_hours', 44.0)
             self.schedule.saturday_hours = s.get('saturday_hours', 4.0)
-            self.schedule.workdays = s.get('workdays', [0, 1, 2, 3, 4])
+            self.schedule.workdays = s.get('workdays', [0, 1, 2, 3, 4, 5])
             
-        except Exception:
-            pass
+            print(f"[Config] Carregado: empresa='{self.company.name}', escala={self.schedule.schedule_type.value}")
+            
+        except Exception as e:
+            print(f"[Config] Erro ao carregar: {e}")
 
 
 class SettingsWindow(ctk.CTkToplevel):
@@ -928,11 +1349,11 @@ class SettingsWindow(ctk.CTkToplevel):
         
         # Escala
         stype = SCHEDULE_FROM_LABEL.get(
-            self.settings_schedule_var.get(), ScheduleType.SCALE_5X2
+            self.settings_schedule_var.get(), ScheduleType.SCALE_6X1
         )
         self.schedule.schedule_type = stype
         defaults = self.SCHEDULE_DEFAULTS.get(stype, {})
-        self.schedule.workdays = defaults.get("days", [0,1,2,3,4])
+        self.schedule.workdays = defaults.get("days", [0,1,2,3,4,5])
         self.schedule.saturday_hours = defaults.get("sat", 0)
         
         try:
