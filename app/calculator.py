@@ -107,7 +107,7 @@ class WorkCalculator:
         
         if num_punches == 2 and is_workday and expected > 6:
             # Jornada > 6h com apenas 2 marcações — não registrou intervalo
-            workday.observation = "Sem registro de intervalo (apenas entrada/saída)"
+            workday.observation = "Jornada contínua (sem intervalo registrado)"
         
         if not is_workday and punches:
             # Trabalhou em dia de folga — tudo é hora extra
@@ -180,11 +180,10 @@ class WorkCalculator:
             if diff > 0:
                 total_minutes += diff
         
-        # Se tem 2 marcações e jornada > 6h, desconta intervalo configurado
-        if len(punches) == 2:
-            hours = total_minutes / 60
-            if hours > 6:
-                total_minutes -= schedule.break_duration_minutes
+        # Se tem 2 marcações: respeitar o registro real.
+        # NÃO descontar intervalo automaticamente — o funcionário
+        # pode ter trabalhado direto sem almoço.
+        # O intervalo só é calculado quando há 4 marcações (E1→S1 + E2→S2).
         
         return max(0, total_minutes / 60)
     

@@ -722,8 +722,8 @@ class SettingsWindow(ctk.CTkToplevel):
         super().__init__(parent)
         
         self.title("Configurações")
-        self.geometry("500x550")
-        self.minsize(450, 500)
+        self.geometry("500x700")
+        self.minsize(450, 600)
         
         self.company = Company(
             name=company.name, cnpj=company.cnpj,

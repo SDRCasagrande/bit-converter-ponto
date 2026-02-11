@@ -263,14 +263,25 @@ class PDFExporter:
         pdf.cell(18, ROW_H, date_str, border=1, align='C', fill=fill)
         pdf.cell(12, ROW_H, day_name, border=1, align='C', fill=fill)
         
-        # Marcações
+        # Marcações — posicionamento inteligente
         punches = wd.punches
-        entries = [
-            punches[0].time.strftime('%H:%M') if len(punches) > 0 else '',
-            punches[1].time.strftime('%H:%M') if len(punches) > 1 else '',
-            punches[2].time.strftime('%H:%M') if len(punches) > 2 else '',
-            punches[3].time.strftime('%H:%M') if len(punches) > 3 else '',
-        ]
+        
+        if len(punches) == 2 and punches[0].time.hour >= 11:
+            # Entrada à tarde: posicionar como Ent2/Sai2
+            entries = [
+                '',
+                '',
+                punches[0].time.strftime('%H:%M'),
+                punches[1].time.strftime('%H:%M'),
+            ]
+        else:
+            # Comportamento normal
+            entries = [
+                punches[0].time.strftime('%H:%M') if len(punches) > 0 else '',
+                punches[1].time.strftime('%H:%M') if len(punches) > 1 else '',
+                punches[2].time.strftime('%H:%M') if len(punches) > 2 else '',
+                punches[3].time.strftime('%H:%M') if len(punches) > 3 else '',
+            ]
         
         for entry in entries:
             pdf.cell(16, ROW_H, entry, border=1, align='C', fill=fill)
